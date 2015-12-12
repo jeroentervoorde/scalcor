@@ -1,7 +1,10 @@
 package com.simacan.scalcor
 
 import com.simacan.scalcor.Scalcor2.Filters.BoolExpr
+import com.simacan.scalcor.Scalcor2.Shapes.ObjectShape
+import play.api.libs.json._
 
+import scala.reflect.runtime.universe._
 /**
  * Created by jeroen on 12/8/15.
  */
@@ -10,7 +13,6 @@ object Scalcor2 extends App {
   trait Type[T]
 
   abstract class ObjectType[T] extends Type[T]
-
   case class Field[T](name: String) extends Type[T]
 
   object TupleTypes {
@@ -19,20 +21,31 @@ object Scalcor2 extends App {
     implicit def tuple2Type[A,B](t: (A,B)) = new Tuple2Type[A,B](t)
   }
 
-  trait Projection[T] {
+  abstract class Shape[T : Reads] {
+    def fromJson(json: JsValue) : JsResult[T]
   }
-  object Projection {
-    class FieldProjection[T <: Field[_]](f: T) extends Projection[T]
 
-    implicit def fieldProjection[T <: Field[_]](f: T) = new FieldProjection[T](f)
+  object Shapes {
+    case class FieldShape[T : Reads](field: Field[T]) extends Shape[T] {
+      override def fromJson(json: JsValue): JsResult[T] = (json \ field.name).validate[T]
+    }
+    implicit def fieldShape[T : Reads](f: Field[T]) : Shape[T] = FieldShape(f)
 
-    class Tuple2Projection[A,B](tuple: (A,B))(implicit ev1: A => Projection[A], ev2: B => Projection[B]) extends Projection[(A,B)]
+    case class ObjectShape[T : Reads](obj: ObjectType[T]) extends Shape[T] {
+      override def fromJson(json: JsValue): JsResult[T] = json.validate[T]
+    }
+    implicit def objectShape[T : Reads](f: ObjectType[T]) = ObjectShape(f)
 
-    implicit def tup2[A, B](t: (A,B))(implicit ev1: A => Projection[A], ev2: B => Projection[B]) = new Tuple2Projection[A, B](t)
+//    case class Tuple2Shape[A,B](tup: (Field[A], Field[B])) extends Shape[(A,B)] {
+//      override def fromJson(json: JsValue): JsResult[(A, B)] = {
+//      }
+//    }
+//    implicit def tuple2Shape[A,B](tup: (Field[A], Field[B])) = Tuple2Shape(tup)
+  }
 
-    class ObjectTypeProjection[T <: ObjectType[_]](o: T) extends Projection[T]
-
-    implicit def objectTypeProjection[T <: ObjectType[_]](o: T) : Projection[T] = new ObjectTypeProjection[T](o)
+  trait Projection[T] {
+    def toJson: JsValue
+    def fromJson(js: JsValue) : T
   }
 
   object Filters {
@@ -62,32 +75,47 @@ object Scalcor2 extends App {
     def wkt = Field[String]("wkt")
   }
 
+  object RouteType {
+    def objectShape[T : Reads](f: ObjectType[T]) = ObjectShape(f)
 
-  case class Query[T](val p: T, val filter: Option[BoolExpr]= None)(implicit val projection: T => Projection[T]) {
-    def map[T2](q: T => T2)(implicit tt: T2 => Projection[T2]) : Query[T2] = new Query[T2](q(p), filter)
+    implicit val formatsRoute = Json.format[Route]
+    implicit def routeShape(rt: RouteType) : Shape[Route] = objectShape[Route](rt).asInstanceOf[Shape[Route]]
+  }
 
-    def filter(q: T => BoolExpr) : Query[T] = {
+  case class Query[F, T : TypeTag](val p: T, val filter: Option[BoolExpr]= None)(implicit ev: T <:< Type[F], shp: T => Shape[F]) {
+    val tag = implicitly[TypeTag[T]]
+
+    def map[F2, T2 : TypeTag](q: T => T2)(implicit ev: T2 <:< Type[F2], shp: T2 => Shape[F2]) : Query[F2, T2] = new Query[F2, T2](q(p), filter)
+
+    def filter(q: T => BoolExpr) : Query[F, T] = {
       val f = q(p)
       val newFilter : Option[BoolExpr] = filter.map(flt => flt.&&(f)).orElse(Some(f))
       new Query(p, newFilter)
     }
+
+    def parseResult(json: JsValue) : JsResult[F] = shp(p).fromJson(json)
   }
 
   import Filters._
-  import Projection._
+  import Shapes._
+  import RouteType._
 
   object Query {
-    def apply[T](o: T)(implicit projection: T => Projection[T]) = new Query(o)
+    def apply[F, T : TypeTag](o: T)(implicit ev: T <:< Type[F], shp: T => Shape[F]) = new Query(o)
   }
+
+  import RouteType._
+  val routeJson = Json.toJson(Route("lalal", "lololo"))
 
   val q2 = for {
     q <- Query(new RouteType()) if q.uuid === "hansworst"
-  } yield ( q.uuid )
+  } yield (q.uuid)
 
-  val q3 = Query(new RouteType()).filter(q => q.uuid === "hallo").map(q => (q.uuid, q.wkt) )
+  println(q2.parseResult(routeJson))
 
-  println(q2)
 
-  println(q3.projection(q3.p))
+  val q3 = Query(new RouteType()).filter(q => q.uuid === "hallo").map(q => q.uuid )
+
+  println(q3.tag)
 
 }
