@@ -80,22 +80,6 @@ object Scalcor2 extends App {
 
   }
 
-  case class Route(
-    uuid: String,
-    wkt: String
-  )
-
-  object Route {
-    implicit val formatsRoute = Json.format[Route]
-  }
-
-  class RouteType extends ObjectType[Route] {
-    def uuid = Field[String]("uuid")
-    def wkt = Field[String]("wkt")
-  }
-
-  object RouteType extends RouteType
-
   case class Query[F, T : TypeTag](val p: T, val filter: Option[BoolExpr]= None)(implicit ev: T <:< Type[F], shp: T => Shape[F]) {
     val tag = implicitly[TypeTag[T]]
 
@@ -110,12 +94,32 @@ object Scalcor2 extends App {
     def parseResult(json: JsValue) : JsResult[F] = shp(p).fromJson(json)
   }
 
+
+
+
   import Filters._
   import Shapes._
 
   object Query {
     def apply[F, T : TypeTag](o: T)(implicit ev: T <:< Type[F], shp: T => Shape[F]) = new Query(o)
   }
+
+
+  case class Route(
+                    uuid: String,
+                    wkt: String
+                    )
+
+  object Route {
+    implicit val formatsRoute = Json.format[Route]
+  }
+
+  class RouteType extends ObjectType[Route] {
+    def uuid = Field[String]("uuid")
+    def wkt = Field[String]("wkt")
+  }
+
+  object RouteType extends RouteType
 
   val routeJson = Json.toJson(Route("lalal", "lololo"))
 
