@@ -11,27 +11,26 @@ import scala.reflect.runtime.universe._
  */
 object Scalcor2 extends App {
 
-//  abstract class Type[T](implict ev:) {
-//    def ~[F2, T2](t: T2)(implicit ev: T2 <:< Type[F2]) : Tuple2Type((this, t))
-//  }
-
-  trait Type {
-    type T
+  trait Type[T] {
+    type R >: T
   }
 
 
-  abstract class ObjectType[F] extends Type {
-    type T = F
-
+  abstract class ObjectType[F] extends Type[F] {
+    override type R = F
   }
-  case class Field[F](name: String) extends Type {
-    type T = F
+
+  case class Field[F](name: String) extends Type[F] {
+    override type R = F
   }
 
   object TupleTypes {
-    case class Tuple2Type[A <: Type,B <: Type](t: (A,B)) extends Type
 
-    implicit def tuple2Type[A <: Type,B <: Type](t: (A,B)) = new Tuple2Type[A,B](t)
+    case class Tuple2Type[A <: Type[_],B <: Type[_]](val t: (A,B)) extends Type[(A#R,B#R)] {
+      def tuple = this
+    }
+
+    implicit def tuple2Type[A <: Type[_],B <: Type[_]](t: (A,B)) = new Tuple2Type[A,B](t)
   }
 
   abstract class Shape[T] {
@@ -49,15 +48,15 @@ object Scalcor2 extends App {
     }
     implicit def objectShape[T : Reads](f: ObjectType[T]) = ObjectShape(f)
 
-    case class Tuple2Shape[A <: Type,B <: Type](tup: Tuple2Type[A,B])(implicit shp1: A => Shape[A#T], shp2: B => Shape[B#T]) extends Shape[(A#T,B#T)] {
-      override def fromJson(json: JsValue): JsResult[(A#T,B#T)] = {
+    case class Tuple2Shape[A <: Type[_],B <: Type[_]](tup: Tuple2Type[A,B])(implicit shp1: A => Shape[A#R], shp2: B => Shape[B#R]) extends Shape[Tuple2Type[A,B]#R] {
+      override def fromJson(json: JsValue): JsResult[(A#R,B#R)] = {
         val a = shp1(tup.t._1).fromJson(json).get
         val b = shp2(tup.t._2).fromJson(json).get
 
         JsSuccess((a,b))
       }
     }
-    implicit def tuple2Shape[A <: Type,B <: Type](tup: Tuple2Type[A,B])(implicit shp1: A => Shape[A#T], shp2: B => Shape[B#T]) = Tuple2Shape(tup)
+    implicit def tuple2Shape[A <: Type[_],B <: Type[_]](tup: Tuple2Type[A,B])(implicit shp1: A => Shape[A#R], shp2: B => Shape[B#R]) : Shape[Tuple2Type[A,B]#R] = Tuple2Shape(tup)
   }
 
 
@@ -78,9 +77,9 @@ object Scalcor2 extends App {
 
   }
 
-  case class Query[T <: Type](val p: T, val filter: Option[BoolExpr]= None)(implicit shp: T => Shape[T#T]) {
+  case class Query[T <: Type[_]](val p: T, val filter: Option[BoolExpr]= None)(implicit shp: T => Shape[T#R]) {
 
-    def map[T2 <: Type](q: T => T2)(implicit shp: T2 => Shape[T2#T]) : Query[T2] = new Query[T2](q(p), filter)
+    def map[T2 <: Type[_]](q: T => T2)(implicit shp: T2 => Shape[T2#R]) : Query[T2] = new Query[T2](q(p), filter)
 
     def filter(q: T => BoolExpr) : Query[T] = {
       val f = q(p)
@@ -88,7 +87,7 @@ object Scalcor2 extends App {
       new Query(p, newFilter)
     }
 
-    def parseResult(json: JsValue) : JsResult[T#T] = shp(p).fromJson(json)
+    def parseResult(json: JsValue) : JsResult[T#R] = shp(p).fromJson(json)
   }
 
 
@@ -99,7 +98,7 @@ object Scalcor2 extends App {
   import TupleTypes._
 
   object Query {
-    def apply[T <: Type](o: T)(implicit shp: T => Shape[T#T]) = new Query(o)
+    def apply[T <: Type[_]](o: T)(implicit shp: T => Shape[T#R]) = new Query(o)
   }
 
 
@@ -124,12 +123,12 @@ object Scalcor2 extends App {
 //  val q2 = Query(new RouteType()).map(q => Tuple2Type(q.wkt, q.uuid))
   val q2 = for {
     q <- Query(new RouteType()) if q.uuid === "hansworst"
-  } yield (q.uuid, q.wkt)
+  } yield (q.uuid, q.wkt).tuple
 
   println(q2)
   println(q2.parseResult(routeJson))
 
-  val q3 = Query(new RouteType()).filter(q => q.uuid === "hallo").map(q => q.uuid )
+  val q3 = Query(new RouteType()).filter(q => q.uuid === "hallo").map(q => (q.uuid, q.wkt).tuple )
 
   println(q3)
 
