@@ -23,8 +23,19 @@ object Scalcor3 extends App {
     implicit val bool = primitiveMapper[Boolean]
   }
 
-  case class Field[T](name: String, tt: Type[T]) {
+  trait Named[T] {
+    val name: String
+    def value: Type[T]
+  }
+
+  case class Field[T](name: String, tt: Type[T]) extends Named[T] {
     def value = tt
+  }
+
+  case class Struct[T,TT](name: String, tt: TT)(implicit  ev: TT <:< Type[T]) extends Named[T] {
+    def value = tt
+
+    def map[T2 <: Type[_]](q: TT => T2) : T2 = q(tt)
   }
 
   trait ObjectType[T] extends Type[T] {
@@ -34,6 +45,9 @@ object Scalcor3 extends App {
       Field(name, tt)
     }
 
+    def obj[T,TT](name: String, value: TT)(implicit  ev: TT <:< Type[T]) = {
+      Struct(name, value)
+    }
   }
 
   object TupleTypes {
@@ -52,10 +66,10 @@ object Scalcor3 extends App {
     def fromJson(json: JsValue): T
   }
 
-  case class Object2Mapper[R,A,B](a: Field[A], b: Field[B], constructor: (A,B) => R) extends Mapper[R] {
+  case class Object2Mapper[R,A,B](a: Named[A], b: Named[B], constructor: (A,B) => R) extends Mapper[R] {
     def fromJson(json: JsValue): R = {
-      val f1 = a.tt.mapper.fromJson((json \ a.name).get)
-      val f2 = b.tt.mapper.fromJson((json \ b.name).get)
+      val f1 = a.value.mapper.fromJson((json \ a.name).get)
+      val f2 = b.value.mapper.fromJson((json \ b.name).get)
 
       constructor(f1,f2)
     }
@@ -119,7 +133,7 @@ object Scalcor3 extends App {
   class RouteType extends ObjectType[Route] {
 
     def uuid = field[String]("uuid")
-    def address = field[Address]("address")(AddressType)
+    def address = obj("address", new AddressType())
 
     override val mapper: Mapper[Route] = Object2Mapper(uuid, address, Route.apply)
   }
@@ -134,7 +148,7 @@ object Scalcor3 extends App {
 
   val q2 = for {
     q <- Query(new RouteType()) if q.uuid === "hansworst"
-  } yield (q.uuid.value, q.uuid.value).tuple
+  } yield (q.uuid.value, q.address.value).tuple
 
   println(q2)
   println(q2.p.mapper.fromJson(routeJson))
