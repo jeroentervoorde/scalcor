@@ -1,6 +1,6 @@
 package com.simacan.scalcor
 
-import play.api.libs.json.{Reads, JsValue, Json}
+import play.api.libs.json._
 
 /**
   * Created by jeroen on 12/20/15.
@@ -10,6 +10,15 @@ object Scalcor3 extends App {
     type R <: T
 
     val mapper: Mapper[T]
+  }
+
+  trait Named[T] extends Type[T] {
+    val name: String
+    def value: Type[T]
+
+    override val mapper: Mapper[T] = new Mapper[T] {
+      override def fromJson(json: JsValue): T = value.mapper.fromJson((json \ name).get)
+    }
   }
 
   object Primitives {
@@ -23,10 +32,6 @@ object Scalcor3 extends App {
     implicit val bool = primitiveMapper[Boolean]
   }
 
-  trait Named[T] {
-    val name: String
-    def value: Type[T]
-  }
 
   case class Field[T](name: String, tt: Type[T]) extends Named[T] {
     def value = tt
@@ -35,7 +40,7 @@ object Scalcor3 extends App {
   case class Struct[T,TT](name: String, tt: TT)(implicit  ev: TT <:< Type[T]) extends Named[T] {
     def value = tt
 
-    def map[T2 <: Type[_]](q: TT => T2) : T2 = q(tt)
+    def map[T2,TT2](q: TT => TT2)(implicit  ev: TT2 <:< Type[T2]) : Struct[T2,TT2] = Struct(name, q(tt))
   }
 
   trait ObjectType[T] extends Type[T] {
@@ -50,11 +55,23 @@ object Scalcor3 extends App {
     }
   }
 
+  trait TupleType[T] extends Type[T] {
+    def fields: Seq[Named[_]]
+  }
+
   object TupleTypes {
-    implicit class Tuple2Mapper[A <: Type[_],B <: Type[_]](tup: (A,B)) {
-      def tuple = new Type[(A,B)] {
-        override val mapper: Mapper[(A, B)] = new Mapper[(A,B)] {
-          override def fromJson(json: JsValue): (A, B) = ???
+    implicit class Tuple2Mapper[A,B](tup: (Named[A],Named[B])) {
+      def tuple = new TupleType[(A,B)] {
+
+        override def fields: Seq[Named[_]] = Seq(tup._1, tup._2)
+
+        val mapper: Mapper[(A, B)] = new Mapper[(A,B)] {
+          override def fromJson(json: JsValue): (A, B) = {
+            val a = tup._1.mapper.fromJson(json)
+            val b = tup._2.mapper.fromJson(json)
+
+            (a,b)
+          }
         }
       }
     }
@@ -142,16 +159,42 @@ object Scalcor3 extends App {
 
   implicit val formatsAddress = Json.format[Address]
   implicit val formatsRoute = Json.format[Route]
-  val routeJson = Json.toJson(Route("lalal", Address("Esstraat", "Enschede")))
+  val routeJson = Json.parse(
+    """
+      | {
+      |  "uuid": "my uuid",
+      |  "address": {
+      |    "street": "Estraat",
+      |    "city": "Enschede"
+      |  }
+      | }
+    """.stripMargin)
 
   import TupleTypes._
 
   val q2 = for {
     q <- Query(new RouteType()) if q.uuid === "hansworst"
-  } yield (q.uuid.value, q.address.value).tuple
+  } yield (q.uuid, q.address.map(addr => (addr.city, addr.street).tuple)).tuple
+
+  implicit val writesType : Writes[Type[_]] = new Writes[Type[_]] {
+    override def writes(o: Type[_]): JsValue = o match {
+      case named: Named[_] =>
+        Json.obj(
+          "field" -> named.name,
+          "value" -> Json.toJson(named.value)
+        )
+      case tuple: TupleType[_] =>
+        tuple.fields.foldLeft(Json.obj())((obj, tup) => obj + (tup.name -> Json.toJson(tup.value)))
+      case other =>
+        JsString(s"Unknown type: $other")
+
+    }
+
+  }
 
   println(q2)
   println(q2.p.mapper.fromJson(routeJson))
 
+  println(Json.toJson(q2.p))
 
 }
